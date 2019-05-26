@@ -19,12 +19,17 @@
 extern crate mio;
 
 use std::io;
+use std::net::{IpAddr, Ipv4Addr};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use mio::net::UdpSocket;
-use mio::event::Evented;
+use std::io::Read;
+
 use mio::{Events, Poll, PollOpt, Ready, Registration, Token};
+use mio::event::Evented;
+use mio::net::UdpSocket;
+use mio::tcp::{TcpListener, TcpStream};
+use std::io::Write;
+use std::collections::HashMap;
 
 const MAX_MESSAGE_SIZE: usize = 1500;
 const MAX_EVENTS: usize = 16;
@@ -95,21 +100,31 @@ impl Evented for PeriodicTimer {
 }
 
 fn main() {
+    // # https://docs.rs/mio/0.6.10/mio/
     let localhost = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
+
+    let addr = "127.0.0.1:13265".parse().unwrap();
+
+// Setup the server socket
+    let server = TcpListener::bind(&addr).unwrap();
+
     // Create and bind the socket
-    let socket = UdpSocket::bind(&SocketAddr::new(localhost, ECHO_PORT)).unwrap();
+    //let socket = UdpSocket::bind(&SocketAddr::new(localhost, ECHO_PORT)).unwrap();
 
     // Set up mio polling
     let poll = Poll::new().unwrap();
     let mut events = Events::with_capacity(MAX_EVENTS);
-    poll.register(&socket, Token(0), Ready::readable(), PollOpt::level())
+    poll.register(&server, Token(0), Ready::readable(), PollOpt::level())
         .unwrap();
     let timer = PeriodicTimer::new(TIMER_INTERVAL_SECONDS);
     poll.register(&timer, Token(1), Ready::readable(), PollOpt::level())
         .unwrap();
+    let mut vikings = HashMap::new();
 
     // Main loop
+    let data = b"some bytes";
+    let mut line = [0; 512];
     loop {
         // Poll
         println!("before poll()");
@@ -118,17 +133,32 @@ fn main() {
 
         // Process events
         for event in &events {
-            assert!(event.token() == Token(0) || event.token() == Token(1));
+            assert!(event.token() == Token(0) || event.token() == Token(1) || event.token() == Token(2));
             assert!(event.readiness().is_readable());
             match event.token() {
                 Token(0) => {
-                    let mut inbuf = [0u8; MAX_MESSAGE_SIZE];
-                    let (nbytes, addr) = socket.recv_from(&mut inbuf).unwrap();
-                    println!("recv {} bytes from {}.", nbytes, addr);
+                    // new connection
+                    let result = server.accept();
+                    println!("got tcp connection");
+                    println!("is_ok {} ", result.is_ok());
+                    let (mut something, s2) = result.unwrap();
+
+
+                    something.write(data);
+                    poll.register(&something, Token(2), Ready::readable(), PollOpt::level()).unwrap();
+
+                    vikings.insert(2, something);
                 }
                 Token(1) => {
                     println!("{}-second timer", TIMER_INTERVAL_SECONDS);
                     timer.reset();
+                }
+                Token(2) => {
+                    println!("hmm");
+
+
+                    vikings.get(&2).unwrap().read(&mut line);
+                    vikings.get(&2).unwrap().write(b"OK\n");
                 }
                 Token(_) => {
                     panic!("Unknown token in poll.");
