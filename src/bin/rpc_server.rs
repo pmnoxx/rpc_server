@@ -225,6 +225,6 @@ impl RpcServer {
 }
 
 fn main() {
-    let mut rpc_server = RpcServer::new(13265);
+    let mut rpc_server = RpcServer::new(5004);
     rpc_server.io_loop();
 }
