@@ -1,6 +1,13 @@
 extern crate mio;
 extern crate redis;
+extern crate serde_json;
+extern crate serde;
 
+use serde_json::json;
+
+use serde::{Deserialize, Serialize};
+
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::io;
 use std::io::Read;
@@ -11,9 +18,12 @@ use std::time::{Duration, Instant};
 use mio::{Events, Poll, PollOpt, Ready, Registration, Token};
 use mio::event::Evented;
 use mio::tcp::{TcpListener, TcpStream};
-use redis::Commands;
 use redis::{Client, Connection};
-use std::collections::hash_map::RandomState;
+use redis::Commands;
+
+use serde_json::{Result, Value};
+
+
 
 const MAX_EVENTS: usize = 16;
 const TIMER_INTERVAL_SECONDS: u64 = 3;
@@ -112,18 +122,30 @@ impl RedisModel {
 
 
 struct Handler {
-    redis_model : RedisModel
+    redis_model : RedisModel,
+    public_methods: HashMap<String, i32>
 }
 
 impl Handler {
     pub fn new() -> Handler {
         Handler {
-            redis_model : RedisModel::new()
+            redis_model : RedisModel::new(),
+            public_methods : HashMap::new()
+
         }
     }
 
+    pub fn setup(&mut self) {
+
+    }
+
+
     pub fn fetch_an_integer(&mut self) -> i64 {
         return self.redis_model.do_some_redis_op();
+    }
+
+    pub fn fetch_an_integer2(&mut self, xx : i32) -> i32 {
+        return xx;
     }
 
 }
@@ -202,8 +224,26 @@ impl RpcServer {
                         len = buf.len();
                         print!("{}: ", len);
                         if len >= 4 {
-                            if buf[0] == 65 {
+
+                            if buf[0] > 32 {
                                 println!("fetched {}", handler.fetch_an_integer());
+                            }
+                            else {
+                                // TODO avoid this copy, but how?
+                                let mut buf2: Vec<u8> = Vec::new();
+                                for i in 4..buf.len() -1 {
+                                    if buf[i] > 32 {
+                                        buf2.push(buf[i]);
+                                    }
+                                }
+
+                                let buf3: &[u8] = &buf2;
+
+                                let x:HashMap<String, Value> = serde_json::from_slice(buf3).unwrap();
+
+                                println!("json: {}", x.is_empty());
+                                let y : &str = x["test"].as_str().unwrap();
+                                println!("json: {}", y);
                             }
                         }
                         for val in buf {
