@@ -144,6 +144,11 @@ impl RpcServer {
         let server = TcpListener::bind(&addr).unwrap();
         self.poll.register(&server, Token(0), Ready::readable(), PollOpt::level())
             .unwrap();
+
+        let addr2 = format!("{}:{}", "127.0.0.1", (self.port + 1).to_string()).parse().unwrap();
+        let server2 = TcpListener::bind(&addr2).unwrap();
+        self.poll.register(&server2, Token(2), Ready::readable(), PollOpt::level())
+            .unwrap();
         println!("Listening on port {}", self.port);
 
         // add timer example
@@ -199,6 +204,18 @@ impl RpcServer {
                         Token(0) => {
                             // new connection
                             let result = server.accept();
+                            println!("got tcp connection");
+                            let (mut stream, _s2) = result.unwrap();
+                            stream.write(b"hello\n").unwrap();
+
+                            self.poll.register(&stream, Token(self.connection_id), Ready::readable(), PollOpt::level()).unwrap();
+
+                            self.connections.insert(Token(self.connection_id), stream);
+                            self.connection_id += 1;
+                        }
+                        Token(2) => {
+                            // new connection
+                            let result = server2.accept();
                             println!("got tcp connection");
                             let (mut stream, _s2) = result.unwrap();
                             stream.write(b"hello\n").unwrap();
