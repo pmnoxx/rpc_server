@@ -1,41 +1,20 @@
-// This program demonstrates how a single mio instance can be used to
-// receive both system events (e.g. file descriptor events) and
-// non-system events (e.g. events sourced on user-space threads other
-// than the thread running the mio poll).  We listen for incoming UDP
-// datagrams on port 2000, and also listen for events created by our
-// timer thread every three seconds.
-//
-// Running this program on Linux via strace shows how mio notifies the
-// polling thread of the non-system event by writing to a pipe:
-//
-// 28365 write(6, "\1", 1)                 = 1
-// 28365 nanosleep({3, 0},  <unfinished ...>
-// 28364 <... epoll_wait resumed> [{EPOLLIN, {u32=4294967295, u64=18446744073709551615}}], 16, -1) = 1
-// 28364 read(5, "\1", 128)                = 1
-// 28364 read(5, 0x7ffc96a72cf8, 128)      = -1 EAGAIN (Resource temporarily unavailable)
-// 28364 write(1, "after poll\n", 11)      = 11
-// 28364 write(1, "3-second timer\n", 15)  = 15
-
 extern crate mio;
+extern crate redis;
 
+use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr};
+use std::io::Read;
+use std::io::Write;
 use std::thread;
 use std::time::{Duration, Instant};
-use std::io::Read;
 
 use mio::{Events, Poll, PollOpt, Ready, Registration, Token};
 use mio::event::Evented;
-use mio::net::UdpSocket;
 use mio::tcp::{TcpListener, TcpStream};
-use std::io::Write;
-use std::collections::HashMap;
-extern crate redis;
 use redis::Commands;
+use std::collections::hash_map::RandomState;
 
-const MAX_MESSAGE_SIZE: usize = 1500;
 const MAX_EVENTS: usize = 16;
-const ECHO_PORT: u16 = 2000;
 const TIMER_INTERVAL_SECONDS: u64 = 3;
 
 /// An Evented implementation which implements a simple timer by indicating readiness at periodic
@@ -50,8 +29,6 @@ impl PeriodicTimer {
     fn new(interval: u64) -> PeriodicTimer {
         let (registration, set_readiness) = Registration::new2();
         let set_readiness_clone = set_readiness.clone();
-
-        // Spawn a thread to periodically trigger the timer by setting read readiness.
         // Note: This example code omits important things like arranging termination of the thread
         // when the PeriodicTimer is dropped.
         thread::spawn(move || loop {
@@ -101,89 +78,102 @@ impl Evented for PeriodicTimer {
     }
 }
 
-fn main() {
-    // # https://docs.rs/mio/0.6.10/mio/
-    let localhost = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+struct RpcServer {
+    port: i32,
+    connections: HashMap<Token, TcpStream, RandomState>,
+    connection_id: usize,
+    poll: Poll
+}
 
-
-    let addr = "127.0.0.1:13265".parse().unwrap();
-
-// Setup the server socket
-    let server = TcpListener::bind(&addr).unwrap();
-
-    // Create and bind the socket
-    //let socket = UdpSocket::bind(&SocketAddr::new(localhost, ECHO_PORT)).unwrap();
-
-    // Set up mio polling
-    let poll = Poll::new().unwrap();
-    let mut events = Events::with_capacity(MAX_EVENTS);
-    poll.register(&server, Token(0), Ready::readable(), PollOpt::level())
-        .unwrap();
-    let timer = PeriodicTimer::new(TIMER_INTERVAL_SECONDS);
-    poll.register(&timer, Token(1), Ready::readable(), PollOpt::level())
-        .unwrap();
-    let mut vikings = HashMap::new();
-    fn fetch_an_integer() -> redis::RedisResult<isize> {
-        // connect to redis
-        let client = redis::Client::open("redis://127.0.0.1/")?;
-        let con = client.get_connection()?;
-        // throw away the result, just make sure it does not fail
-        for x in 1..1000000 {
-            let _: () = con.set("my_key", 42)?;
+impl RpcServer {
+    pub fn new(port: i32) -> RpcServer {
+        RpcServer {
+            port,
+            connections: HashMap::new(),
+            connection_id: 2,
+            poll: Poll::new().unwrap()
         }
-        // read back the key and return it.  Because the return value
-        // from the function is a result for integer this will automatically
-        // convert into one.
-        con.get("my_key")
     }
 
+    fn io_loop(&mut self) {
 
+        // initialize pool
+        let mut events = Events::with_capacity(MAX_EVENTS);
 
+        // start listener
+        let addr = format!("{}:{}", "127.0.0.1:", self.port.to_string()).parse().unwrap();
+        let server = TcpListener::bind(&addr).unwrap();
+        self.poll.register(&server, Token(0), Ready::readable(), PollOpt::level())
+            .unwrap();
 
-    // Main loop
-    let data = b"some bytes";
-    let mut line = [0; 512];
-    loop {
-        // Poll
-        println!("before poll()");
-        poll.poll(&mut events, None).unwrap();
-        println!("after poll()");
+        // add timer example
+        let timer = PeriodicTimer::new(TIMER_INTERVAL_SECONDS);
+        self.poll.register(&timer, Token(1), Ready::readable(), PollOpt::level())
+            .unwrap();
 
-        // Process events
-        for event in &events {
-            assert!(event.token() == Token(0) || event.token() == Token(1) || event.token() == Token(2));
-            assert!(event.readiness().is_readable());
-            match event.token() {
-                Token(0) => {
+        fn fetch_an_integer() -> redis::RedisResult<isize> {
+            // connect to redis
+            let client = redis::Client::open("redis://127.0.0.1/")?;
+            let con = client.get_connection()?;
+            // throw away the result, just make sure it does not fail
+            for _x in 1..1000000 {
+                let _: () = con.set("my_key", _x)?;
+            }
+            // read back the key and return it.  Because the return value
+            // from the function is a result for integer this will automatically
+            // convert into one.
+            con.get("my_key")
+        }
 
-                    // new connection
-                    let result = server.accept();
-                    println!("got tcp connection");
-                    println!("is_ok {} ", result.is_ok());
-                    let (mut something, s2) = result.unwrap();
+        // Main loop
+        loop {
+            // Poll
+            println!("before poll()");
+            self.poll.poll(&mut events, None).unwrap();
+            println!("after poll()");
 
-
-                    something.write(data);
-                    poll.register(&something, Token(2), Ready::readable(), PollOpt::level()).unwrap();
-
-                    vikings.insert(2, something);
-                }
-                Token(1) => {
-                    println!("{}-second timer", TIMER_INTERVAL_SECONDS);
-                    timer.reset();
-                }
-                Token(2) => {
+            // Process events
+            for event in &events {
+                assert!(event.token() == Token(0) || event.token() == Token(1) || event.token() == Token(2));
+                assert!(event.readiness().is_readable());
+                if self.connections.contains_key(&event.token()) {
                     println!("hmm");
                     println!("fetch {}", fetch_an_integer().unwrap());
 
+                    let mut stream = self.connections.get(&event.token()).unwrap();
+                    let mut line = [0; 512];
+                    stream.read(&mut line).unwrap();
+                    stream.write(b"OK\n").unwrap();
+                } else {
+                    match event.token() {
+                        Token(0) => {
+                            // new connection
+                            let result = server.accept();
+                            println!("got tcp connection");
+                            let (mut something, _s2) = result.unwrap();
+                            something.write(b"hello\n").unwrap();
 
-                    vikings.get(&2).unwrap().read(&mut line);
-                    vikings.get(&2).unwrap().write(b"OK\n");
-                }
-                Token(_) => {
-                    panic!("Unknown token in poll.");
+                            self.poll.register(&something, Token(2), Ready::readable(), PollOpt::level()).unwrap();
+
+                            self.connections.insert(Token(self.connection_id), something);
+                            self.connection_id += 1;
+                        }
+                        Token(1) => {
+                            println!("{}-second timer", TIMER_INTERVAL_SECONDS);
+                            timer.reset();
+                        }
+                        Token(_) => {
+                            panic!("Unknown token in poll.");
+                        }
+                    }
                 }
             }
         }
     }
+
+}
+
+fn main() {
+    let mut rpc_server = RpcServer::new(13265);
+    rpc_server.io_loop();
 }
