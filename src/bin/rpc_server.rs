@@ -147,13 +147,18 @@ impl RpcServer {
                 assert!(event.readiness().is_readable());
                 if self.connections.contains_key(&event.token()) {
                     println!("hmm");
-                    println!("fetch {}", fetch_an_integer().unwrap());
+
+                    // println!("fetch {}", fetch_an_integer().unwrap());
 
                     let mut stream = self.connections.get(&event.token()).unwrap();
-                    let mut line = [0; 512];
-                    stream.read(&mut line).unwrap();
-                    stream.write(b"OK\n").unwrap();
-                    self.num_rpc_count += 1;
+
+                    let mut buf = Vec::new();
+                    let response = stream.read_to_end(&mut buf);
+                    print!("{}: ", buf.len());
+                    for val in buf {
+                        print!("{} ", val);
+                    }
+                    println!("\n")
                 } else {
                     match event.token() {
                         Token(0) => {
