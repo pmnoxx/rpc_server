@@ -101,10 +101,12 @@ impl RpcServer {
         let mut events = Events::with_capacity(MAX_EVENTS);
 
         // start listener
-        let addr = format!("{}:{}", "127.0.0.1:", self.port.to_string()).parse().unwrap();
+        let addr = format!("{}:{}", "127.0.0.1", self.port.to_string()).parse().unwrap();
+
         let server = TcpListener::bind(&addr).unwrap();
         self.poll.register(&server, Token(0), Ready::readable(), PollOpt::level())
             .unwrap();
+        println!("Listening on port {}", self.port);
 
         // add timer example
         let timer = PeriodicTimer::new(TIMER_INTERVAL_SECONDS);
@@ -134,7 +136,6 @@ impl RpcServer {
 
             // Process events
             for event in &events {
-                assert!(event.token() == Token(0) || event.token() == Token(1) || event.token() == Token(2));
                 assert!(event.readiness().is_readable());
                 if self.connections.contains_key(&event.token()) {
                     println!("hmm");
