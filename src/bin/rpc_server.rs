@@ -12,6 +12,7 @@ use mio::{Events, Poll, PollOpt, Ready, Registration, Token};
 use mio::event::Evented;
 use mio::tcp::{TcpListener, TcpStream};
 use redis::Commands;
+use redis::{Client, Connection};
 use std::collections::hash_map::RandomState;
 
 const MAX_EVENTS: usize = 16;
@@ -78,32 +79,51 @@ impl Evented for PeriodicTimer {
     }
 }
 
-struct Connection {
-    token: Token
-}
 
-impl Connection {
+struct RedisModel {
+    client : Client
 
 }
 
+impl RedisModel {
+    pub fn new() -> RedisModel {
+        let client = redis::Client::open("redis://127.0.0.1/").unwrap();
+        RedisModel {
+            client
+        }
+    }
+    pub fn get_connection(&mut self) -> Connection {
+        return self.client.get_connection().unwrap();
+    }
 
-struct Handler {
-
-}
-
-impl Handler {
-    pub fn fetch_an_integer(&self) -> redis::RedisResult<isize> {
+    pub fn do_some_redis_op(&mut self) -> i64 {
         // connect to redis
-        let client = redis::Client::open("redis://127.0.0.1/")?;
-        let con = client.get_connection()?;
+        let con = self.get_connection();
         // throw away the result, just make sure it does not fail
         for _x in 1..1000000 {
-            let _: () = con.set("my_key", _x)?;
+            let _: () = con.set("my_key", _x).unwrap();
         }
         // read back the key and return it.  Because the return value
         // from the function is a result for integer this will automatically
         // convert into one.
-        con.get("my_key")
+        return con.get("my_key").unwrap();
+    }
+}
+
+
+struct Handler {
+    redis_model : RedisModel
+}
+
+impl Handler {
+    pub fn new() -> Handler {
+        Handler {
+            redis_model : RedisModel::new()
+        }
+    }
+
+    pub fn fetch_an_integer(&mut self) -> i64 {
+        return self.redis_model.do_some_redis_op();
     }
 
 }
@@ -156,7 +176,7 @@ impl RpcServer {
         self.poll.register(&timer, Token(1), Ready::readable(), PollOpt::level())
             .unwrap();
 
-        let handler = Handler {};
+        let mut handler = Handler::new();
 
         // Main loop
         loop {
@@ -173,17 +193,17 @@ impl RpcServer {
 
                     // println!("fetch {}", fetch_an_integer().unwrap());
 
-                    let mut len = 0;
+                    let mut len;
                     {
                         let mut stream = self.connections.get(&event.token()).unwrap();
 
                         let mut buf = Vec::new();
-                        let response = stream.read_to_end(&mut buf);
+                        let _response = stream.read_to_end(&mut buf);
                         len = buf.len();
                         print!("{}: ", len);
                         if len >= 4 {
                             if buf[0] == 65 {
-                                println!("fetched {}", handler.fetch_an_integer().unwrap());
+                                println!("fetched {}", handler.fetch_an_integer());
                             }
                         }
                         for val in buf {
@@ -212,6 +232,8 @@ impl RpcServer {
 
                             self.connections.insert(Token(self.connection_id), stream);
                             self.connection_id += 1;
+
+                            // {"headers": {"support_msgpack_prepend": true}, "data": {"name": "Maintenance.264"}, "method": "name_channel"}
                         }
                         Token(2) => {
                             // new connection
