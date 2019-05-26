@@ -30,6 +30,8 @@ use mio::net::UdpSocket;
 use mio::tcp::{TcpListener, TcpStream};
 use std::io::Write;
 use std::collections::HashMap;
+extern crate redis;
+use redis::Commands;
 
 const MAX_MESSAGE_SIZE: usize = 1500;
 const MAX_EVENTS: usize = 16;
@@ -121,6 +123,22 @@ fn main() {
     poll.register(&timer, Token(1), Ready::readable(), PollOpt::level())
         .unwrap();
     let mut vikings = HashMap::new();
+    fn fetch_an_integer() -> redis::RedisResult<isize> {
+        // connect to redis
+        let client = redis::Client::open("redis://127.0.0.1/")?;
+        let con = client.get_connection()?;
+        // throw away the result, just make sure it does not fail
+        for x in 1..1000000 {
+            let _: () = con.set("my_key", 42)?;
+        }
+        // read back the key and return it.  Because the return value
+        // from the function is a result for integer this will automatically
+        // convert into one.
+        con.get("my_key")
+    }
+
+
+
 
     // Main loop
     let data = b"some bytes";
@@ -137,6 +155,7 @@ fn main() {
             assert!(event.readiness().is_readable());
             match event.token() {
                 Token(0) => {
+
                     // new connection
                     let result = server.accept();
                     println!("got tcp connection");
@@ -155,6 +174,7 @@ fn main() {
                 }
                 Token(2) => {
                     println!("hmm");
+                    println!("fetch {}", fetch_an_integer().unwrap());
 
 
                     vikings.get(&2).unwrap().read(&mut line);
