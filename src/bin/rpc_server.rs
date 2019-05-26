@@ -82,7 +82,8 @@ struct RpcServer {
     port: i32,
     connections: HashMap<Token, TcpStream, RandomState>,
     connection_id: usize,
-    poll: Poll
+    poll: Poll,
+    num_rpc_count: i32
 }
 
 impl RpcServer {
@@ -91,8 +92,15 @@ impl RpcServer {
             port,
             connections: HashMap::new(),
             connection_id: 2,
-            poll: Poll::new().unwrap()
+            poll: Poll::new().unwrap(),
+            num_rpc_count: 0
         }
+    }
+
+    fn print_stats(&mut self) {
+        println!("Num rpc in last 3 second: {}", self.num_rpc_count);
+
+        self.num_rpc_count = 0;
     }
 
     fn io_loop(&mut self) {
@@ -130,9 +138,9 @@ impl RpcServer {
         // Main loop
         loop {
             // Poll
-            println!("before poll()");
+            // println!("before poll()");
             self.poll.poll(&mut events, None).unwrap();
-            println!("after poll()");
+            // println!("after poll()");
 
             // Process events
             for event in &events {
@@ -145,6 +153,7 @@ impl RpcServer {
                     let mut line = [0; 512];
                     stream.read(&mut line).unwrap();
                     stream.write(b"OK\n").unwrap();
+                    self.num_rpc_count += 1;
                 } else {
                     match event.token() {
                         Token(0) => {
@@ -161,6 +170,7 @@ impl RpcServer {
                         }
                         Token(1) => {
                             println!("{}-second timer", TIMER_INTERVAL_SECONDS);
+                            self.print_stats();
                             timer.reset();
                         }
                         Token(_) => {
