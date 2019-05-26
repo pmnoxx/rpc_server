@@ -78,6 +78,14 @@ impl Evented for PeriodicTimer {
     }
 }
 
+struct Connection {
+    token: Token
+}
+
+impl Connection {
+
+}
+
 struct RpcServer {
     port: i32,
     connections: HashMap<Token, TcpStream, RandomState>,
@@ -150,27 +158,39 @@ impl RpcServer {
 
                     // println!("fetch {}", fetch_an_integer().unwrap());
 
-                    let mut stream = self.connections.get(&event.token()).unwrap();
+                    let mut len = 0;
+                    {
+                        let mut stream = self.connections.get(&event.token()).unwrap();
 
-                    let mut buf = Vec::new();
-                    let response = stream.read_to_end(&mut buf);
-                    print!("{}: ", buf.len());
-                    for val in buf {
-                        print!("{} ", val);
+                        let mut buf = Vec::new();
+                        let response = stream.read_to_end(&mut buf);
+                        len = buf.len();
+                        print!("{}: ", len);
+                        for val in buf {
+                            print!("{} ", val);
+                        }
+                        println!("\n");
+                        if len == 0 {
+                            println!("Connection closed for token: {}", event.token().0);
+                            self.poll.deregister(stream).unwrap();
+                        }
                     }
-                    println!("\n")
+                    if len == 0 {
+                        self.connections.remove_entry(&event.token()).unwrap();
+                    }
+                    self.num_rpc_count += 1;
                 } else {
                     match event.token() {
                         Token(0) => {
                             // new connection
                             let result = server.accept();
                             println!("got tcp connection");
-                            let (mut something, _s2) = result.unwrap();
-                            something.write(b"hello\n").unwrap();
+                            let (mut stream, _s2) = result.unwrap();
+                            stream.write(b"hello\n").unwrap();
 
-                            self.poll.register(&something, Token(2), Ready::readable(), PollOpt::level()).unwrap();
+                            self.poll.register(&stream, Token(self.connection_id), Ready::readable(), PollOpt::level()).unwrap();
 
-                            self.connections.insert(Token(self.connection_id), something);
+                            self.connections.insert(Token(self.connection_id), stream);
                             self.connection_id += 1;
                         }
                         Token(1) => {
@@ -179,7 +199,7 @@ impl RpcServer {
                             timer.reset();
                         }
                         Token(_) => {
-                            panic!("Unknown token in poll.");
+                            panic!("Unknown token in poll. {}", event.token().0);
                         }
                     }
                 }
